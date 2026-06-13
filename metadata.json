@@ -1,0 +1,6 @@
+{
+  "name": "Epidemic Spread Simulator",
+  "description": "An AI-powered public health simulation dashboard where officials run 180-day epidemic scenarios, ask question in plain English, analyze interactive disease curve charts, and assign stakeholder action tasks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
