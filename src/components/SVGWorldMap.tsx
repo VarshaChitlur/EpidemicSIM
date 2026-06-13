@@ -119,7 +119,7 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
       </div>
 
       {/* Interactive SVG World Map Viewport */}
-      <div className="relative bg-black/45 border border-white/5 rounded-2xl overflow-hidden p-2 flex items-center justify-center min-h-[190px]">
+      <div className="relative bg-[#02050c]/90 border border-white/5 rounded-2xl overflow-hidden p-2 flex items-center justify-center min-h-[190px]">
         <svg
           viewBox="0 0 1000 480"
           className="w-full h-auto max-h-[240px] select-none transition-all"
@@ -127,10 +127,28 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
           {/* DEFINITIONS FOR GLOW/SHADOW EFFECTS */}
           <defs>
             <filter id="glow-rt" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              <feGaussianBlur stdDeviation="5" result="blur" />
+              <feComponentTransfer in="blur" result="glow">
+                <feFuncA type="linear" slope="2" />
+              </feComponentTransfer>
+              <feMerge>
+                <feMergeNode in="glow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
             </filter>
           </defs>
+
+          {/* HIGH-FIDELITY SATELLITE MAP RASTER PLATE BEHIND CONTROLS */}
+          <image
+            href="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c4/Earthmap1000x500compac.jpg/1024px-Earthmap1000x500compac.jpg"
+            x="0"
+            y="-5"
+            width="1000"
+            height="490"
+            opacity="0.28"
+            style={{ mixBlendMode: 'screen', filter: 'brightness(0.9) contrast(1.1)' }}
+            preserveAspectRatio="none"
+          />
 
           {/* REGION 1: AMERICAS */}
           <g
@@ -143,16 +161,18 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
             <path
               d="M 100 40 L 220 40 L 280 180 L 190 230 L 160 210 L 150 250 L 110 220 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Americas', hoveredRegion === 'Americas', selectedRegion === 'Americas')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Americas' ? '3' : '1.5'}
+              filter={selectedRegion === 'Americas' ? 'url(#glow-rt)' : undefined}
             />
             {/* South America */}
             <path
               d="M 190 230 L 250 270 L 280 340 L 220 440 L 190 440 L 170 320 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Americas', hoveredRegion === 'Americas', selectedRegion === 'Americas')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Americas' ? '3' : '1.5'}
+              filter={selectedRegion === 'Americas' ? 'url(#glow-rt)' : undefined}
             />
             {/* Caribbean / Central Connection Line */}
-            <path d="M 160 210 Q 185 220 190 230" stroke="rgba(255,255,255,0.15)" strokeDasharray="2 2" />
+            <path d="M 160 210 Q 185 220 190 230" stroke="rgba(255,255,255,0.25)" strokeDasharray="3 3" />
           </g>
 
           {/* REGION 2: EUROPE */}
@@ -166,7 +186,8 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
             <path
               d="M 390 30 L 460 25 L 530 40 L 550 140 L 480 200 L 410 180 L 370 120 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Europe', hoveredRegion === 'Europe', selectedRegion === 'Europe')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Europe' ? '3' : '1.5'}
+              filter={selectedRegion === 'Europe' ? 'url(#glow-rt)' : undefined}
             />
           </g>
 
@@ -181,13 +202,15 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
             <path
               d="M 400 195 L 480 200 L 530 220 L 580 270 L 550 310 L 520 430 L 450 350 L 380 280 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Africa & ME', hoveredRegion === 'Africa & ME', selectedRegion === 'Africa & ME')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Africa & ME' ? '3' : '1.5'}
+              filter={selectedRegion === 'Africa & ME' ? 'url(#glow-rt)' : undefined}
             />
             {/* Madagascar */}
             <path
               d="M 570 360 L 590 370 L 580 400 L 560 380 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Africa & ME', hoveredRegion === 'Africa & ME', selectedRegion === 'Africa & ME')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Africa & ME' ? '3' : '1.5'}
+              filter={selectedRegion === 'Africa & ME' ? 'url(#glow-rt)' : undefined}
             />
           </g>
 
@@ -202,31 +225,36 @@ export const SVGWorldMap: React.FC<SVGWorldMapProps> = ({
             <path
               d="M 530 40 L 780 50 L 850 150 L 760 280 L 620 280 L 540 185 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Asia-Pacific', hoveredRegion === 'Asia-Pacific', selectedRegion === 'Asia-Pacific')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Asia-Pacific' ? '3' : '1.5'}
+              filter={selectedRegion === 'Asia-Pacific' ? 'url(#glow-rt)' : undefined}
             />
             {/* Japan */}
             <path
               d="M 830 110 L 855 120 L 845 150 L 820 130 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Asia-Pacific', hoveredRegion === 'Asia-Pacific', selectedRegion === 'Asia-Pacific')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Asia-Pacific' ? '3' : '1.5'}
+              filter={selectedRegion === 'Asia-Pacific' ? 'url(#glow-rt)' : undefined}
             />
             {/* Southeastern Islands */}
             <path
               d="M 740 290 L 820 310 L 800 340 L 710 320 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Asia-Pacific', hoveredRegion === 'Asia-Pacific', selectedRegion === 'Asia-Pacific')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Asia-Pacific' ? '3' : '1.5'}
+              filter={selectedRegion === 'Asia-Pacific' ? 'url(#glow-rt)' : undefined}
             />
             {/* Australia */}
             <path
               d="M 720 360 L 870 350 L 920 420 L 830 450 L 740 430 Z"
               className={`transition-all duration-300 ${getRegionHeatColor('Asia-Pacific', hoveredRegion === 'Asia-Pacific', selectedRegion === 'Asia-Pacific')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Asia-Pacific' ? '3' : '1.5'}
+              filter={selectedRegion === 'Asia-Pacific' ? 'url(#glow-rt)' : undefined}
             />
             {/* New Zealand */}
             <path
               d="M 910 440 L 940 450 L 920 480 M 930 430 Q 940 450 930 470"
               className={`transition-all duration-300 ${getRegionHeatColor('Asia-Pacific', hoveredRegion === 'Asia-Pacific', selectedRegion === 'Asia-Pacific')}`}
-              strokeWidth="2"
+              strokeWidth={selectedRegion === 'Asia-Pacific' ? '3' : '1.5'}
+              filter={selectedRegion === 'Asia-Pacific' ? 'url(#glow-rt)' : undefined}
             />
           </g>
 

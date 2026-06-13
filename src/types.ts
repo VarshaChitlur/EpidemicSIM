@@ -1,9 +1,20 @@
 export type SocialDistanceLevel = 'none' | 'mild' | 'moderate' | 'strict';
 
+export interface EpidemicType {
+  id: string;
+  name: string;
+  r0: number;
+  vaccEffectiveness: number;
+  hospitalRate: number;
+  recoveryRate: number;
+  description: string;
+}
+
 export interface SimulationParams {
   vaccRate: number;
   socialDistance: SocialDistanceLevel;
   testingIntensity: number;
+  selectedEpidemicId?: string;
 }
 
 export interface SimulationResult {
@@ -65,6 +76,7 @@ export interface Message {
   comparison?: ScenarioComparison;
   searchGrounding?: SearchGrounding;
   tasksCreated?: Task[];
+  isFallbackMode?: boolean;
 }
 
 export interface AppConfig {

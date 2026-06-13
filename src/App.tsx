@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   TrendingUp,
   AlertTriangle,
@@ -23,7 +23,9 @@ import {
   Sparkles,
   Inbox,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Terminal,
+  Layers
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -44,6 +46,7 @@ import {
 
 import {
   SocialDistanceLevel,
+  EpidemicType,
   SimulationParams,
   SimulationResult,
   Task,
@@ -52,15 +55,78 @@ import {
 
 import { CopilotServiceVisualizer } from './components/CopilotPanel';
 
+// Global Epidemic/Pathogen Profiles
+export const DEFAULT_EPIDEMICS: EpidemicType[] = [
+  {
+    id: 'covid19',
+    name: 'COVID-19',
+    r0: 3.2,
+    vaccEffectiveness: 0.72,
+    hospitalRate: 0.008,
+    recoveryRate: 0.08,
+    description: 'Moderate to high transmission respiratory infection with established vaccine coverage pathways.'
+  },
+  {
+    id: 'h5n1',
+    name: 'H5N1 Avian Influenza (Bird Flu)',
+    r0: 2.0,
+    vaccEffectiveness: 0.60,
+    hospitalRate: 0.04,
+    recoveryRate: 0.07,
+    description: 'High severity zoonotic avian strain with elevated clinical hospitality requirements.'
+  },
+  {
+    id: 'disease_x',
+    name: '"Disease X" — A Novel Pathogen',
+    r0: 5.0,
+    vaccEffectiveness: 0.50,
+    hospitalRate: 0.015,
+    recoveryRate: 0.06,
+    description: 'Highly contagious hypothetical agent with extreme transmission dynamics and fast-tracked vaccine trials.'
+  },
+  {
+    id: 'ebola',
+    name: 'Ebola (Bundibugyo Virus — Central Africa 2026)',
+    r0: 1.8,
+    vaccEffectiveness: 0.40,
+    hospitalRate: 0.15,
+    recoveryRate: 0.05,
+    description: 'Extremely severe viral hemorrhagic fever with major regional surge bed dependency.'
+  },
+  {
+    id: 'mpox',
+    name: 'Mpox (New Clades)',
+    r0: 1.5,
+    vaccEffectiveness: 0.80,
+    hospitalRate: 0.02,
+    recoveryRate: 0.09,
+    description: 'Contact-driven viral agent with high vaccine efficacy and moderate hospitalization load.'
+  },
+  {
+    id: 'nipah',
+    name: 'Nipah Virus',
+    r0: 1.6,
+    vaccEffectiveness: 0.30,
+    hospitalRate: 0.12,
+    recoveryRate: 0.06,
+    description: 'Zoonotic paramyxovirus with high case-fatality rates requiring extensive negative-pressure isolation wards.'
+  }
+];
+
 // Client-side quick simulation math for seamless, zero-latency slider interactions
-const runSIRSimulation = (params: SimulationParams): SimulationResult => {
+const runSIRSimulation = (params: SimulationParams, epidemic?: EpidemicType): SimulationResult => {
+  const activeEpidemic = epidemic || DEFAULT_EPIDEMICS[0];
   const POPULATION = 100_000_000;
   let S = POPULATION - 2_400_000;
   let I = 2_400_000;
   let R = 0;
-  const R0 = 3.2;
+  
+  const R0 = activeEpidemic.r0;
+  const vaccEffCoeff = activeEpidemic.vaccEffectiveness;
+  const hospitalRateCoeff = activeEpidemic.hospitalRate;
+  const recoveryRateCoeff = activeEpidemic.recoveryRate;
 
-  const vaccEffect = (params.vaccRate / 100) * 0.72;
+  const vaccEffect = (params.vaccRate / 100) * vaccEffCoeff;
   const sdEffect = { none: 0, mild: 0.18, moderate: 0.48, strict: 0.75 }[params.socialDistance] || 0;
   const testEffect = (params.testingIntensity / 100) * 0.25;
   const totalReduction = Math.min(vaccEffect + sdEffect + testEffect, 0.95);
@@ -73,13 +139,13 @@ const runSIRSimulation = (params: SimulationParams): SimulationResult => {
 
   for (let day = 0; day < 180; day++) {
     const newI = (S / POPULATION) * I * Reff * 0.15;
-    const newR = I * 0.08;
+    const newR = I * recoveryRateCoeff;
     S = Math.max(0, S - newI);
     I = Math.max(0, I + newI - newR);
     R += newR;
     
     dailyCases.push(Math.round(I));
-    dailyBeds.push(Math.round(I * 0.008));
+    dailyBeds.push(Math.round(I * hospitalRateCoeff));
     
     if (I > peakCases) {
       peakCases = I;
@@ -98,7 +164,7 @@ const runSIRSimulation = (params: SimulationParams): SimulationResult => {
     rEffective: parseFloat(Reff.toFixed(2)),
     dailyCases,
     dailyBeds,
-    hospitalPeakBeds: Math.round(peakCasesRounded * 0.008),
+    hospitalPeakBeds: Math.round(peakCasesRounded * hospitalRateCoeff),
     regionalDistribution: {
       northeast: Math.round(peakCasesRounded * 0.22),
       midwest: Math.round(peakCasesRounded * 0.24),
@@ -106,7 +172,7 @@ const runSIRSimulation = (params: SimulationParams): SimulationResult => {
       west: Math.round(peakCasesRounded * 0.24)
     },
     params,
-    summary: `With ${params.vaccRate}% vaccination rate, ${params.socialDistance} mitigation level, and ${params.testingIntensity}% diagnostics focus, Rt is limited to ${Reff.toFixed(2)}. Peak reaches ${(peakCasesRounded / 1e6).toFixed(2)}M infections.`
+    summary: `For ${activeEpidemic.name} with ${params.vaccRate}% vaccination rate, ${params.socialDistance} mitigation level, and ${params.testingIntensity}% diagnostics focus, Rt is limited to ${Reff.toFixed(2)}. Peak reaches ${(peakCasesRounded / 1e6).toFixed(2)}M infections, requiring ${Math.round(peakCasesRounded * hospitalRateCoeff).toLocaleString()} surge beds.`
   };
 };
 
@@ -117,16 +183,19 @@ const BASELINE_PARAMS: SimulationParams = {
   testingIntensity: 15
 };
 
-const BASELINE_RESULT = runSIRSimulation(BASELINE_PARAMS);
+const FALLBACK_BASELINE_RESULT = runSIRSimulation(BASELINE_PARAMS);
 
 interface MiniTrendVisualizerProps {
   result: SimulationResult;
+  baseline?: SimulationResult;
 }
 
-const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result }) => {
+const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result, baseline }) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const maxVal = Math.max(...result.dailyCases, ...BASELINE_RESULT.dailyCases, 1);
+  const activeBaseline = baseline || FALLBACK_BASELINE_RESULT;
+
+  const maxVal = Math.max(...result.dailyCases, ...activeBaseline.dailyCases, 1);
   const width = 280;
   const height = 75;
 
@@ -138,7 +207,7 @@ const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result }) => 
   const linePath = `M ${points.join(' L ')}`;
   const areaPath = `${linePath} L ${width},${height} L 0,${height} Z`;
 
-  const baselinePoints = BASELINE_RESULT.dailyCases.map((val, index) => {
+  const baselinePoints = activeBaseline.dailyCases.map((val, index) => {
     const x = (index / 179) * width;
     const y = height * 0.95 - (val / maxVal) * (height * 0.9);
     return `${x},${y}`;
@@ -147,7 +216,7 @@ const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result }) => 
 
   const hoverX = hoverIndex !== null ? (hoverIndex / 179) * width : 0;
   const hoverYActive = hoverIndex !== null ? height * 0.95 - (result.dailyCases[hoverIndex] / maxVal) * (height * 0.9) : 0;
-  const hoverYBaseline = hoverIndex !== null ? height * 0.95 - (BASELINE_RESULT.dailyCases[hoverIndex] / maxVal) * (height * 0.9) : 0;
+  const hoverYBaseline = hoverIndex !== null ? height * 0.95 - (activeBaseline.dailyCases[hoverIndex] / maxVal) * (height * 0.9) : 0;
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement, MouseEvent>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -158,8 +227,8 @@ const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result }) => 
     }
   };
 
-  const peakDiffPercent = Math.round((1 - result.peakCases / BASELINE_RESULT.peakCases) * 100);
-  const isBetterThanBaseline = result.peakCases < BASELINE_RESULT.peakCases;
+  const peakDiffPercent = Math.round((1 - result.peakCases / activeBaseline.peakCases) * 100);
+  const isBetterThanBaseline = result.peakCases < activeBaseline.peakCases;
   const isControlled = result.rEffective < 1.0;
 
   const formatCaseNumber = (num: number) => {
@@ -350,10 +419,18 @@ const MiniTrendVisualizer: React.FC<MiniTrendVisualizerProps> = ({ result }) => 
 
 interface ExpandableTrendVisualizerProps {
   result: SimulationResult;
+  message?: Message;
+  onApplyParams?: (params: SimulationParams) => void;
+  baseline?: SimulationResult;
 }
 
-const ExpandableTrendVisualizer: React.FC<ExpandableTrendVisualizerProps> = ({ result }) => {
-  const [isOpen, setIsOpen] = useState(false);
+const ExpandableTrendVisualizer: React.FC<ExpandableTrendVisualizerProps> = ({ 
+  result, 
+  message, 
+  onApplyParams,
+  baseline
+}) => {
+  const [isOpen, setIsOpen] = useState(true);
 
   const isControlled = result.rEffective < 1.0;
 
@@ -368,13 +445,20 @@ const ExpandableTrendVisualizer: React.FC<ExpandableTrendVisualizerProps> = ({ r
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3.5 py-3 flex items-center justify-between text-left cursor-pointer hover:bg-white/5 transition-colors focus:outline-none"
+        className="w-full px-3.5 py-3 flex items-center justify-between text-left cursor-pointer hover:bg-white/5 transition-colors focus:outline-none bg-white/[0.02]"
       >
         <div className="flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-indigo-400 group-hover/expandable:text-indigo-300 transition-colors" />
           <div className="leading-tight">
-            <span className="font-bold text-[11px] text-slate-200 tracking-wider uppercase block">Projection Overview</span>
-            <span className="text-[10px] text-white/40 font-mono">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-bold text-[11px] text-slate-200 tracking-wider uppercase">Projection Overview</span>
+              {message?.isFallbackMode && (
+                <span className="text-[7.5px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase font-bold select-none animate-pulse">
+                  Local Simulation Engine
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] text-white/40 font-mono block mt-0.5">
               Peak {formatCaseNumber(result.peakCases)} on Day {result.peakDay}
             </span>
           </div>
@@ -398,8 +482,51 @@ const ExpandableTrendVisualizer: React.FC<ExpandableTrendVisualizerProps> = ({ r
       </button>
 
       {isOpen && (
-        <div className="p-2 border-t border-white/5 bg-black/35">
-          <MiniTrendVisualizer result={result} />
+        <div className="p-4 border-t border-white/5 bg-slate-950/45 space-y-4">
+          {/* 1. Actual chat reply text inside the expandable row */}
+          {message && (
+            <div className="text-slate-100 text-[12px] leading-relaxed font-sans whitespace-pre-line border-b border-white/5 pb-4">
+              {message.text}
+            </div>
+          )}
+
+          {/* 2. Visualisations: Trend curve graph */}
+          <div className="space-y-1.5">
+            <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-widest block font-mono">
+              📊 Outbreak Trend Forecast
+            </span>
+            <MiniTrendVisualizer result={result} baseline={baseline} />
+          </div>
+
+          {/* 3. Visualisations: Copilot active workspace SVG map */}
+          {message && onApplyParams && (
+            <div className="space-y-1.5 pt-2 border-t border-white/5">
+              <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-widest block font-mono">
+                🪐 Copilot & Spatial Vectors Mapping
+              </span>
+              <CopilotServiceVisualizer
+                message={message}
+                result={result}
+                onApplyParams={onApplyParams}
+              />
+            </div>
+          )}
+
+          {/* 4. Spawned coordinated task list */}
+          {message && message.tasksCreated && message.tasksCreated.length > 0 && (
+            <div className="pt-2 border-t border-white/5 text-[11px]">
+              <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1 uppercase tracking-wider text-[9px]">
+                <CheckCircle className="w-3.5 h-3.5" />
+                Coordinated Stakeholder Tasks Spawned:
+              </div>
+              <ul className="list-disc pl-4 space-y-1 text-white/60">
+                {message.tasksCreated.map((t, i) => (
+                  <li key={i}>{t.title} (<span className="text-[10px] font-mono">{t.group.replace('_', ' ')}</span>)</li>
+                ))}
+              </ul>
+              <div className="mt-1.5 text-white/40 italic text-[10px]">Added automatically to the Task Coordination Board!</div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -407,21 +534,123 @@ const ExpandableTrendVisualizer: React.FC<ExpandableTrendVisualizerProps> = ({ r
 };
 
 export default function App() {
+  const [epidemics, setEpidemics] = useState<EpidemicType[]>(DEFAULT_EPIDEMICS);
+  const [selectedEpidemicId, setSelectedEpidemicId] = useState<string>('covid19');
+
+  const activeEpidemic = epidemics.find(e => e.id === selectedEpidemicId) || DEFAULT_EPIDEMICS[0];
+
+  const baselineResult = useMemo(() => {
+    return runSIRSimulation({
+      vaccRate: 10,
+      socialDistance: 'none',
+      testingIntensity: 15,
+      selectedEpidemicId: selectedEpidemicId
+    }, activeEpidemic);
+  }, [activeEpidemic, selectedEpidemicId]);
+
   const [params, setParams] = useState<SimulationParams>({
     vaccRate: 45,
     socialDistance: 'moderate',
-    testingIntensity: 50
+    testingIntensity: 50,
+    selectedEpidemicId: 'covid19'
   });
 
-  const [activeTab, setActiveTab] = useState<'simulation' | 'advisor' | 'coordination'>('simulation');
+  const [activeTab, setActiveTab ] = useState<'simulation' | 'advisor' | 'coordination' | 'protocols'>('simulation');
   const [regionFilter, setRegionFilter] = useState<'All' | 'Americas' | 'Europe' | 'Asia-Pacific' | 'Africa & ME'>('All');
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   
+  // A2UI Standard Protocol states
+  const [a2uiSession, setA2uiSession] = useState<any>(null);
+  const [isInjectingAction, setIsInjectingAction] = useState(false);
+  const [injectionSuccess, setInjectionSuccess] = useState<boolean | null>(null);
+  const [showDiscoveryJson, setShowDiscoveryJson] = useState(false);
+
+  // Poll A2UI and AG UI Server State
+  useEffect(() => {
+    let active = true;
+    const pollA2UIState = async () => {
+      try {
+        const response = await fetch('/api/a2ui/state');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!active) return;
+
+        setA2uiSession(data);
+
+        // Check if server variables are different from client parameters
+        const sParams = data.currentParams;
+        if (sParams) {
+          if (
+            sParams.vaccRate !== params.vaccRate ||
+            sParams.socialDistance !== params.socialDistance ||
+            sParams.testingIntensity !== params.testingIntensity ||
+            sParams.selectedEpidemicId !== selectedEpidemicId
+          ) {
+            // Update client parameters
+            setParams({
+              vaccRate: sParams.vaccRate,
+              socialDistance: sParams.socialDistance,
+              testingIntensity: sParams.testingIntensity,
+              selectedEpidemicId: sParams.selectedEpidemicId
+            });
+            setSelectedEpidemicId(sParams.selectedEpidemicId);
+            
+            // Re-run simulation
+            const scenarioEpidemic = epidemics.find(e => e.id === sParams.selectedEpidemicId) || activeEpidemic;
+            const updatedResult = runSIRSimulation({
+              vaccRate: sParams.vaccRate,
+              socialDistance: sParams.socialDistance,
+              testingIntensity: sParams.testingIntensity,
+              selectedEpidemicId: sParams.selectedEpidemicId
+            }, scenarioEpidemic);
+            setActiveResult(updatedResult);
+          }
+        }
+
+        // Handle external tasks pushed through A2UI ADD_TASK
+        if (data.externalTasks && data.externalTasks.length > 0) {
+          setTasks((currTasks) => {
+            const updated = [...currTasks];
+            let changed = false;
+            data.externalTasks.forEach((extTask: any) => {
+              const alreadyExists = currTasks.some((t) => t.id === extTask.id || t.title === extTask.title);
+              if (!alreadyExists) {
+                updated.unshift({
+                  id: extTask.id,
+                  title: extTask.title,
+                  assignee: 'A2UI Standard Ingress',
+                  group: extTask.group,
+                  region: extTask.region,
+                  priority: extTask.priority,
+                  dueTime: extTask.dueTime,
+                  status: 'open',
+                  createdAt: new Date().toISOString()
+                });
+                changed = true;
+              }
+            });
+            return changed ? updated : currTasks;
+          });
+        }
+      } catch (err) {
+        console.error("A2UI protocol sync polling error:", err);
+      }
+    };
+
+    pollA2UIState();
+    const interval = setInterval(pollA2UIState, 4000); // Poll every 4 seconds
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [params, selectedEpidemicId, epidemics, activeEpidemic]);
+
   const initialActiveResult = runSIRSimulation({
     vaccRate: 45,
     socialDistance: 'moderate',
-    testingIntensity: 50
-  });
+    testingIntensity: 50,
+    selectedEpidemicId: 'covid19'
+  }, DEFAULT_EPIDEMICS[0]);
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -494,6 +723,146 @@ export default function App() {
     dueTime: '24 hours'
   });
 
+  // Global Epidemic selection and file uploading states
+  const [showUploadSection, setShowUploadSection] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  
+  // Custom disease attributes
+  const [customName, setCustomName] = useState('');
+  const [customR0, setCustomR0] = useState('');
+  const [customHospitalRate, setCustomHospitalRate] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleEpidemicChange = (id: string) => {
+    setSelectedEpidemicId(id);
+    const chosen = epidemics.find(e => e.id === id) || DEFAULT_EPIDEMICS[0];
+    const newSim = runSIRSimulation(params, chosen);
+    setActiveResult(newSim);
+  };
+
+  const handleParseFileContent = (text: string, filename: string) => {
+    setUploadedFileName(filename);
+    try {
+      if (filename.endsWith('.json')) {
+        const parsed = JSON.parse(text);
+        if (parsed.name) setCustomName(parsed.name);
+        if (parsed.r0 !== undefined || parsed.R0 !== undefined) {
+          setCustomR0(String(parsed.r0 !== undefined ? parsed.r0 : parsed.R0));
+        }
+        if (parsed.hospitalRate !== undefined) {
+          setCustomHospitalRate(String(parsed.hospitalRate * 100)); // display as percentage input
+        } else if (parsed.hospitalizationRate !== undefined) {
+          setCustomHospitalRate(String(parsed.hospitalizationRate * 100));
+        } else if (parsed.severity !== undefined) {
+          setCustomHospitalRate(String(parsed.severity));
+        }
+        return;
+      }
+
+      // Check CSV/TXT line-by-line helper metrics
+      const lines = text.split('\n');
+      let detectedName = filename.replace(/\.[^/.]+$/, "");
+      let detectedR0 = 2.8;
+      let detectedHospital = 3.5;
+
+      for (const line of lines) {
+        const lower = line.toLowerCase();
+        if (lower.includes('r0') || lower.includes('reproduction')) {
+          const match = line.match(/[\d\.]+/);
+          if (match) detectedR0 = parseFloat(match[0]);
+        }
+        if (lower.includes('hospital') || lower.includes('severity') || lower.includes('bed')) {
+          const match = line.match(/[\d\.]+/);
+          if (match) {
+            const val = parseFloat(match[0]);
+            detectedHospital = val < 1 ? val * 100 : val;
+          }
+        }
+        if (lower.includes('name') || lower.includes('title')) {
+          const parts = line.split(/[:,=]/);
+          if (parts.length > 1) {
+            detectedName = parts[1].trim().replace(/['"'\r]/g, '');
+          }
+        }
+      }
+
+      setCustomName(detectedName);
+      setCustomR0(String(detectedR0));
+      setCustomHospitalRate(String(detectedHospital));
+    } catch (e) {
+      console.error("Pathogen telemetry parse failed, falling back:", e);
+      setCustomName(filename.replace(/\.[^/.]+$/, ""));
+      setCustomR0("2.5");
+      setCustomHospitalRate("4.5");
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          handleParseFileContent(event.target.result as string, file.name);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          handleParseFileContent(event.target.result as string, file.name);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleCreateCustomEpidemic = () => {
+    const finalName = customName.trim() || uploadedFileName.replace(/\.[^/.]+$/, "") || "Custom Super-Strain";
+    const finalR0 = Math.max(0.2, Math.min(20.0, parseFloat(customR0) || 2.4));
+    const finalHospital = Math.max(0.1, Math.min(80.0, parseFloat(customHospitalRate) || 5.0)) / 100;
+
+    const newEpic: EpidemicType = {
+      id: `custom_${Date.now()}`,
+      name: finalName,
+      r0: finalR0,
+      vaccEffectiveness: 0.55,
+      hospitalRate: finalHospital,
+      recoveryRate: 0.07,
+      description: `Custom pathogen defined via telemetry dataset: transmission index R0 ${finalR0.toFixed(1)}, clinical hospital demand index of ${(finalHospital * 100).toFixed(1)}%.`
+    };
+
+    setEpidemics(prev => [...prev, newEpic]);
+    setSelectedEpidemicId(newEpic.id);
+    
+    const newSim = runSIRSimulation(params, newEpic);
+    setActiveResult(newSim);
+
+    const aiLogMsg: Message = {
+      id: `custom-log-${Date.now()}`,
+      sender: 'ai',
+      text: `Alert: Cataloged user-defined custom pathogen "${finalName}" into the global active observation registry. Simulated projections, regional distribution caseload curves, and advisor guidelines are adjusted immediately to support active quarantine planning.`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      simulationResult: newSim
+    };
+    setMessages(prev => [...prev, aiLogMsg]);
+
+    setCustomName('');
+    setCustomR0('');
+    setCustomHospitalRate('');
+    setUploadedFileName('');
+    setShowUploadSection(false);
+  };
+
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -504,13 +873,13 @@ export default function App() {
   const handleSliderChange = (key: keyof SimulationParams, value: any) => {
     const updated = { ...params, [key]: value };
     setParams(updated);
-    const newSim = runSIRSimulation(updated);
+    const newSim = runSIRSimulation(updated, activeEpidemic);
     setActiveResult(newSim);
   };
 
   const handleApplyParams = (updatedParams: SimulationParams) => {
     setParams(updatedParams);
-    const newSim = runSIRSimulation(updatedParams);
+    const newSim = runSIRSimulation(updatedParams, activeEpidemic);
     setActiveResult(newSim);
   };
 
@@ -539,7 +908,8 @@ export default function App() {
           message: promptText,
           history: messages.slice(-8).map(m => ({ sender: m.sender, text: m.text })),
           currentParams: params,
-          webSearchEnabled: webSearchEnabled
+          webSearchEnabled: webSearchEnabled,
+          epidemic: activeEpidemic
         })
       });
 
@@ -556,7 +926,8 @@ export default function App() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         simulationResult: data.simulationResult,
         searchGrounding: data.searchGrounding,
-        tasksCreated: data.tasks
+        tasksCreated: data.tasks,
+        isFallbackMode: data.isFallbackMode
       };
 
       setMessages(prev => [...prev, aiMsg]);
@@ -594,7 +965,7 @@ export default function App() {
 
       const updatedParams = { vaccRate: estVacc, socialDistance: estSD, testingIntensity: estTest };
       setParams(updatedParams);
-      const computedResult = runSIRSimulation(updatedParams);
+      const computedResult = runSIRSimulation(updatedParams, activeEpidemic);
       setActiveResult(computedResult);
 
       const fallbackMsg: Message = {
@@ -607,6 +978,34 @@ export default function App() {
       setMessages(prev => [...prev, fallbackMsg]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleInjectProtocolAction = async (actionType: string, payload: any, sender: string = 'agent_antigravity') => {
+    setIsInjectingAction(true);
+    setInjectionSuccess(null);
+    try {
+      const response = await fetch('/api/a2ui/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionType, payload, sender })
+      });
+      if (response.ok) {
+        setInjectionSuccess(true);
+        const stateRes = await fetch('/api/a2ui/state');
+        if (stateRes.ok) {
+          const data = await stateRes.json();
+          setA2uiSession(data);
+        }
+      } else {
+        setInjectionSuccess(false);
+      }
+    } catch (err) {
+      console.error("A2UI Action Injection Error:", err);
+      setInjectionSuccess(false);
+    } finally {
+      setIsInjectingAction(false);
+      setTimeout(() => setInjectionSuccess(null), 3000);
     }
   };
 
@@ -676,9 +1075,9 @@ export default function App() {
   const chartData = activeResult.dailyCases.map((casesVal, index) => ({
     Day: index,
     'Your Scenario': casesVal,
-    'Baseline (No Action)': BASELINE_RESULT.dailyCases[index] || 0,
+    'Baseline (No Action)': baselineResult.dailyCases[index] || 0,
     'Surge Capacity (Beds)': activeResult.dailyBeds[index] || 0,
-    'Baseline Beds Needed': BASELINE_RESULT.dailyBeds[index] || 0,
+    'Baseline Beds Needed': baselineResult.dailyBeds[index] || 0,
   }));
 
   const regionalBars = [
@@ -761,6 +1160,19 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setActiveTab('protocols')}
+            className={`flex items-center gap-2 border rounded-xl px-3.5 py-1.5 text-xs font-semibold tracking-wide transition-all pointer-events-auto cursor-pointer ${
+              activeTab === 'protocols'
+                ? 'bg-gradient-to-r from-teal-500 to-indigo-600 border-teal-500 text-white shadow shadow-teal-500/30'
+                : 'bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white'
+            }`}
+            id="tab-protocols"
+          >
+            <Terminal className="w-4 h-4 text-teal-400" />
+            <span>Agent Protocol Hub & Stack</span>
+          </button>
+
+          <button
             onClick={handleExportCSV}
             className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-200 hover:text-white transition-colors cursor-pointer"
             title="Download CSV dataset"
@@ -777,6 +1189,169 @@ export default function App() {
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 overflow-hidden max-w-[1600px] mx-auto w-full" id="sim-viewport">
           {/* LEFT COLUMN: Param sliders */}
           <div className="lg:col-span-4 flex flex-col gap-6" id="left-column">
+            {/* Epidemic Type Selection & Dropdown */}
+            <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl shadow-xl" id="epidemic-panel">
+              <div className="flex items-center gap-2 mb-4">
+                <Globe className="w-4 h-4 text-rose-500 animate-spin-slow" />
+                <h3 className="text-sm font-bold tracking-wider text-white uppercase">
+                  Global Epidemic Selector
+                </h3>
+              </div>
+
+              {/* Dropdown */}
+              <div className="mb-4">
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                  Select Active Pathogen
+                </label>
+                <div className="relative">
+                  <select
+                    value={selectedEpidemicId}
+                    onChange={(e) => handleEpidemicChange(e.target.value)}
+                    className="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white appearance-none focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer text-slate-100 font-medium"
+                    id="epidemic-dropdown"
+                  >
+                    {epidemics.map((ep) => (
+                      <option key={ep.id} value={ep.id} className="bg-slate-950 text-white">
+                        {ep.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-3.5 top-3.5 w-4 h-4 text-white/50 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Active Pathogen Specs Card */}
+              <div className="bg-white/5 rounded-2xl border border-white/5 p-3.5 mb-4 text-xs space-y-2">
+                <p className="text-[11px] text-white/80 leading-relaxed font-medium">
+                  {activeEpidemic.description}
+                </p>
+                <div className="grid grid-cols-3 gap-2 pt-1 pb-0.5 text-center font-mono text-[10px]">
+                  <div className="bg-white/5 border border-white/5 p-1.5 rounded-xl">
+                    <span className="text-white/40 block uppercase text-[8px] font-sans font-bold">Base R0</span>
+                    <span className="text-rose-400 font-bold">{activeEpidemic.r0.toFixed(1)}</span>
+                  </div>
+                  <div className="bg-white/5 border border-white/5 p-1.5 rounded-xl">
+                    <span className="text-white/40 block uppercase text-[8px] font-sans font-bold">Severity</span>
+                    <span className="text-amber-400 font-bold">{(activeEpidemic.hospitalRate * 100).toFixed(1)}% Hospital</span>
+                  </div>
+                  <div className="bg-white/5 border border-white/5 p-1.5 rounded-xl">
+                    <span className="text-white/40 block uppercase text-[8px] font-sans font-bold">Recovery</span>
+                    <span className="text-emerald-400 font-bold">{(activeEpidemic.recoveryRate * 100).toFixed(0)}% Daily</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Catalog Custom Pathogen Drawer / Collapsible Trigger */}
+              <div className="border-t border-white/10 pt-4">
+                <button
+                  onClick={() => setShowUploadSection(!showUploadSection)}
+                  className="w-full flex items-center justify-between text-left text-xs font-semibold text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  id="btn-toggle-upload"
+                >
+                  <span className="flex items-center gap-1.5 uppercase tracking-wider text-[10px]">
+                    <Plus className="w-3.5 h-3.5 text-indigo-400" />
+                    Catalog New Custom Pathogen
+                  </span>
+                  {showUploadSection ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+
+                {showUploadSection && (
+                  <div className="mt-3.5 space-y-3.5 animate-fadeIn">
+                    {/* Drag and Drop Uploader Area */}
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleFileDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition-all ${
+                        isDragging 
+                          ? 'border-indigo-500 bg-indigo-500/10' 
+                          : 'border-white/15 hover:border-white/25 bg-white/5 hover:bg-white/10'
+                      }`}
+                      id="drag-drop-uploader"
+                    >
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileSelect}
+                        className="hidden"
+                        accept=".json,.csv,.txt"
+                        id="uploader-file-input"
+                      />
+                      <FileSpreadsheet className="w-5 h-5 text-indigo-400 mx-auto mb-1.5" />
+                      <span className="text-[11px] font-semibold text-slate-200 block">
+                        {uploadedFileName ? `Ready: ${uploadedFileName}` : 'Drag & drop parameters file'}
+                      </span>
+                      <span className="text-[9px] text-white/40 block font-mono mt-0.5">
+                        Supports CSV, JSON, TXT files
+                      </span>
+                    </div>
+
+                    {/* Manual Parameter Customizer Form */}
+                    <div className="space-y-2.5 bg-slate-950/40 p-3 rounded-2xl border border-white/5">
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                          Pathogen Name
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Marburg Strain 2026"
+                          value={customName}
+                          onChange={(e) => setCustomName(e.target.value)}
+                          className="w-full bg-slate-900 border border-white/15 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 placeholder-white/30"
+                          id="input-custom-name"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                            R0 Transmission
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.5"
+                            max="15.0"
+                            placeholder="e.g. 2.4"
+                            value={customR0}
+                            onChange={(e) => setCustomR0(e.target.value)}
+                            className="w-full bg-slate-900 border border-white/15 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                            id="input-custom-r0"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                            Hospital rate (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            max="50.0"
+                            placeholder="e.g. 6.5"
+                            value={customHospitalRate}
+                            onChange={(e) => setCustomHospitalRate(e.target.value)}
+                            className="w-full bg-slate-900 border border-white/15 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                            id="input-custom-severity"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleCreateCustomEpidemic}
+                        className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 px-3 rounded-xl transition-colors cursor-pointer text-xs mt-1"
+                        id="btn-add-custom-epidemic"
+                      >
+                        Register Custom Pathogen
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Direct Slider Mitigation Overrides */}
             <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl shadow-xl" id="sliders-panel">
               <div className="flex items-center justify-between mb-4">
@@ -871,9 +1446,9 @@ export default function App() {
                 <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-1">Peak Active Load</span>
                 <div className="text-2xl font-black text-rose-500 font-mono tracking-tight">{formatCaseNumber(activeResult.peakCases)}</div>
                 <div className="text-[10px] text-white/50 mt-1.5 flex items-center justify-center gap-1 font-medium">
-                  {activeResult.peakCases < BASELINE_RESULT.peakCases ? (
+                  {activeResult.peakCases < baselineResult.peakCases ? (
                     <>
-                      <span className="text-emerald-400 font-bold font-mono">-{Math.round((1 - activeResult.peakCases/BASELINE_RESULT.peakCases)*100)}%</span>
+                      <span className="text-emerald-400 font-bold font-mono font-semibold">-{Math.round((1 - activeResult.peakCases/baselineResult.peakCases)*100)}%</span>
                       v. Baseline
                     </>
                   ) : (
@@ -890,9 +1465,9 @@ export default function App() {
                 <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest block mb-1">Peak Case Day</span>
                 <div className="text-2xl font-black text-yellow-500 font-mono tracking-tight">Day {activeResult.peakDay}</div>
                 <div className="text-[10px] text-white/50 mt-1.5 flex items-center justify-center gap-1 font-medium">
-                  {activeResult.peakDay > BASELINE_RESULT.peakDay ? (
+                  {activeResult.peakDay > baselineResult.peakDay ? (
                     <>
-                      Delayed by <span className="text-emerald-400 font-bold font-mono">+{activeResult.peakDay - BASELINE_RESULT.peakDay}</span> days
+                      Delayed by <span className="text-emerald-400 font-bold font-mono font-semibold">+{activeResult.peakDay - baselineResult.peakDay}</span> days
                     </>
                   ) : (
                     <span>Rapid peak onset danger</span>
@@ -930,7 +1505,7 @@ export default function App() {
                 </div>
                 <div className="flex gap-4 text-[10px] font-mono shrink-0">
                   <span className="text-rose-400 font-bold">&#9612; Selected Model Wave Peak: {formatCaseNumber(activeResult.peakCases)}</span>
-                  <span className="text-white/45">&#9612; Baseline Wave Peak: {formatCaseNumber(BASELINE_RESULT.peakCases)}</span>
+                  <span className="text-white/45">&#9612; Baseline Wave Peak: {formatCaseNumber(baselineResult.peakCases)}</span>
                 </div>
               </div>
 
@@ -1098,68 +1673,24 @@ export default function App() {
                     }`}
                     id={`message-${m.id}`}
                   >
-                    {/* Render our expandable interactive ExpandableTrendVisualizer on top for every agent answer */}
-                    {m.sender === 'ai' && (
-                      <ExpandableTrendVisualizer result={m.simulationResult || activeResult} />
-                    )}
+                    {/* Render our expandable interactive ExpandableTrendVisualizer containing all visualizations and the actual reply */}
+                    {m.sender === 'ai' ? (
+                      <div className="space-y-3 w-full">
+                        {/* 1. Standard readable response text */}
+                        <p className="whitespace-pre-line text-[12px] leading-relaxed text-slate-100 px-1">
+                          {m.text}
+                        </p>
 
-                    <p className="whitespace-pre-line text-[12px] leading-relaxed">{m.text}</p>
-
-                    {/* CopilotKit active SVG map visualization & operations */}
-                    {m.sender === 'ai' && (
-                      <CopilotServiceVisualizer
-                        message={m}
-                        result={m.simulationResult || activeResult}
-                        onApplyParams={handleApplyParams}
-                      />
-                    )}
-
-                    {/* Render live real-time search references when searchGrounding is present */}
-                    {m.sender === 'ai' && m.searchGrounding && m.searchGrounding.sources && m.searchGrounding.sources.length > 0 && (
-                      <div className="mt-3.5 pt-3 border-t border-white/10 text-[11px] space-y-2">
-                        <div className="font-bold text-indigo-300 flex items-center gap-1.5 uppercase tracking-wider text-[9px]">
-                          <Globe className="w-3.5 h-3.5 animate-spin-slow text-indigo-400" />
-                          <span>Global Live Intel Sourced:</span>
-                        </div>
-                        <div className="flex flex-col gap-1.5 max-h-[140px] overflow-y-auto pr-0.5">
-                          {m.searchGrounding.sources.map((src, idx) => (
-                            <a
-                              key={idx}
-                              href={src.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block p-2 bg-white/5 hover:bg-indigo-950/15 border border-white/5 leading-normal hover:border-indigo-500/25 rounded-xl transition-all"
-                            >
-                              <div className="flex items-center justify-between gap-1 mb-0.5">
-                                <span className="font-extrabold text-[10.5px] text-white/90 truncate">
-                                  [{idx + 1}] {src.name}
-                                </span>
-                                <span className="text-[8px] text-indigo-400 font-mono font-bold shrink-0 uppercase tracking-widest">
-                                  source link &rarr;
-                                </span>
-                              </div>
-                              <p className="text-[10px] text-white/45 leading-snug line-clamp-2">
-                                {src.snippet}
-                              </p>
-                            </a>
-                          ))}
-                        </div>
+                        {/* 2. Expandable Interactive Visualizer with Dynamic Projections and Copilot Map */}
+                        <ExpandableTrendVisualizer 
+                          result={m.simulationResult || activeResult}
+                          baseline={baselineResult}
+                          message={m}
+                          onApplyParams={handleApplyParams}
+                        />
                       </div>
-                    )}
-
-                    {m.tasksCreated && m.tasksCreated.length > 0 && (
-                      <div className="mt-2.5 pt-2 border-t border-white/10 text-[11px]">
-                        <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1">
-                          <CheckCircle className="w-3 h-3" />
-                          Coordinated Stakeholder Tasks Spawned:
-                        </div>
-                        <ul className="list-disc pl-4 space-y-1 text-white/60">
-                          {m.tasksCreated.map((t, i) => (
-                            <li key={i}>{t.title} (<span className="text-[10px] font-mono">{t.group.replace('_', ' ')}</span>)</li>
-                          ))}
-                        </ul>
-                        <div className="mt-1.5 text-white/40 italic text-[10px]">Added automatically to the Task Coordination Board!</div>
-                      </div>
+                    ) : (
+                      <p className="whitespace-pre-line text-[12px] leading-relaxed">{m.text}</p>
                     )}
 
                     <span className="text-[10px] text-white/40 self-end mt-1 font-mono">{m.timestamp}</span>
@@ -1243,7 +1774,7 @@ export default function App() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'coordination' ? (
         /* TAB: COORDINATION BOARD */
         <div className="flex-1 flex flex-col p-6 max-w-[1400px] mx-auto w-full gap-6" id="coordination-viewport">
           {/* Status Bar */}
@@ -1402,6 +1933,271 @@ export default function App() {
               );
             })}
           </div>
+        </div>
+      ) : (
+        /* TAB: AGENT PROTOCOLS & TECH STACK HUB */
+        <div className="flex-1 flex flex-col p-6 max-w-[1400px] mx-auto w-full gap-8 overflow-y-auto" id="protocols-viewport">
+          
+          {/* Section A: Header Introduction Card */}
+          <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl" id="protocol-header-status">
+            <div>
+              <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest block font-mono mb-1">Standardized Interoperability Gateway</span>
+              <h2 className="text-xl font-black text-white flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-teal-400" />
+                AG UI & A2UI Protocol Hub
+              </h2>
+              <p className="text-xs text-white/50 mt-1 max-w-2xl">
+                Exposing system variables, discovery maps, and structured handlers. This workspace allows autonomous developer agents to read coordinates, trigger simulation updates, and sync actions programmatically.
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-mono font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>A2UI PORT STATE: LISTENING</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start" id="protocols-grid">
+            
+            {/* LEFT SIDE: PROTOCOL INSTRUMENTS (Terminals, Actions, Stream Logs) */}
+            <div className="lg:col-span-7 flex flex-col gap-6" id="protocol-instruments-panel">
+              
+              {/* Card 1: Action Injection Sandbox (Command Center) */}
+              <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl shadow-lg" id="sandbox-card">
+                <h3 className="text-xs font-bold tracking-wider text-teal-300 uppercase mb-1.5 flex items-center gap-2">
+                  <Sliders className="w-4 h-4" />
+                  Agent Protocol Action Sandbox
+                </h3>
+                <p className="text-[11px] text-white/50 mb-5 leading-normal">
+                  Inject synthetic A2UI actions. These send JSON packages directly to <code className="text-slate-300 bg-white/5 px-1.5 py-0.5 rounded font-mono">POST /api/a2ui/action</code>. The Express server processes the action, mutates simulation variables, and broadcasts the sync event back to the React client runtime.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" id="sandbox-buttons">
+                  <button
+                    onClick={() => handleInjectProtocolAction('SET_PARAMS', { vaccRate: 85, selectedEpidemicId: selectedEpidemicId })}
+                    disabled={isInjectingAction}
+                    className="bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-500/30 text-slate-200 hover:text-white px-4 py-3 rounded-2xl text-xs text-left transition-all relative flex flex-col justify-between group cursor-pointer"
+                  >
+                    <span className="font-bold text-white group-hover:text-teal-400">💉 Boost Vaccination Cover</span>
+                    <span className="text-[10px] text-white/40 font-mono mt-1">SET_PARAMS {"{ vaccRate: 85 }"}</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleInjectProtocolAction('SET_PARAMS', { socialDistance: 'strict', selectedEpidemicId: selectedEpidemicId })}
+                    disabled={isInjectingAction}
+                    className="bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-500/30 text-slate-200 hover:text-white px-4 py-3 rounded-2xl text-xs text-left transition-all relative flex flex-col justify-between group cursor-pointer"
+                  >
+                    <span className="font-bold text-white group-hover:text-teal-400">🛡️ Mandate Strict Lockdowns</span>
+                    <span className="text-[10px] text-white/40 font-mono mt-1">SET_PARAMS {"{ socialDistance: 'strict' }"}</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleInjectProtocolAction('SET_PARAMS', { testingIntensity: 95, selectedEpidemicId: selectedEpidemicId })}
+                    disabled={isInjectingAction}
+                    className="bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-500/30 text-slate-200 hover:text-white px-4 py-3 rounded-2xl text-xs text-left transition-all relative flex flex-col justify-between group cursor-pointer"
+                  >
+                    <span className="font-bold text-white group-hover:text-teal-400">🔍 Surge Surveillance Tests</span>
+                    <span className="text-[10px] text-white/40 font-mono mt-1">SET_PARAMS {"{ testingIntensity: 95 }"}</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleInjectProtocolAction('ADD_TASK', {
+                      title: "Syndicate urgent booster advice and mobilize regional staff resources",
+                      group: "public_health",
+                      region: "Americas",
+                      priority: "High",
+                      dueTime: "6 hours"
+                    })}
+                    disabled={isInjectingAction}
+                    className="bg-white/5 hover:bg-white/10 border border-white/10 hover:border-teal-500/30 text-slate-200 hover:text-white px-4 py-3 rounded-2xl text-xs text-left transition-all relative flex flex-col justify-between group cursor-pointer"
+                  >
+                    <span className="font-bold text-white group-hover:text-teal-400">🚨 Syndicate Strategic Task</span>
+                    <span className="text-[10px] text-white/40 font-mono mt-1">ADD_TASK {"{ group: public_health }"}</span>
+                  </button>
+                </div>
+
+                <div className="mt-5 pt-4 border-t border-white/5 flex items-center justify-between text-xs" id="sandbox-footer">
+                  <div className="flex items-center gap-1.5 min-h-[22px]">
+                    {isInjectingAction && <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
+                    {injectionSuccess === true && <span className="text-emerald-400 font-bold font-mono">✔ PROTOCOL_ACTION_ACKNOWLEDGED (200 OK)</span>}
+                    {injectionSuccess === false && <span className="text-rose-400 font-bold font-mono">❌ PROTOCOL_ACTION_REJECTED (500 Error)</span>}
+                    {!isInjectingAction && injectionSuccess === null && <span className="text-white/30 font-mono">[READY] Click any action vector above to inject standard packet.</span>}
+                  </div>
+
+                  <button
+                    onClick={() => handleInjectProtocolAction('RESET', {})}
+                    disabled={isInjectingAction}
+                    className="bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-300 font-bold px-3 py-1 text-[10px] rounded-lg tracking-wider font-mono cursor-pointer"
+                  >
+                    HARD RESET PROTOCOL
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 2: Discovery Specification Explorer */}
+              <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl shadow-lg" id="discovery-config-card">
+                <div className="flex justify-between items-center mb-1.5">
+                  <h3 className="text-xs font-bold tracking-wider text-teal-300 uppercase flex items-center gap-2">
+                    <Layers className="w-4 h-4" />
+                    AG UI Schema Discovery Schema
+                  </h3>
+                  <button
+                    onClick={() => setShowDiscoveryJson(!showDiscoveryJson)}
+                    className="bg-white/10 hover:bg-white/15 text-slate-300 hover:text-white font-mono font-bold text-[9.5px] px-2.5 py-1 rounded cursor-pointer leading-tight border border-white/10"
+                  >
+                    {showDiscoveryJson ? '[-] COLLAPSE RAW JSON' : '[+] EXPAND CONFIG MAP'}
+                  </button>
+                </div>
+                <p className="text-[11px] text-white/50 leading-relaxed font-sans">
+                  The discovery schema is declared to let external agents dynamically scan. The standard endpoint operates at <code className="text-white/80 bg-white/5 px-1 rounded font-mono font-bold">GET /api/a2ui/config</code> reporting metadata, action parameters limits, and ingress coordinates automatically.
+                </p>
+
+                {showDiscoveryJson && (
+                  <div className="mt-4 bg-[#07090f] border border-white/5 p-4 rounded-2xl max-h-[300px] overflow-y-auto" id="discovery-json-block">
+                    <pre className="text-[10px] font-mono text-zinc-300 leading-relaxed select-all">
+                      {JSON.stringify({
+                        protocol: "Agent-to-User-Interface (A2UI) & Antigravity (AG) UI Open Standards",
+                        spec_version: "1.2.0",
+                        client_bridge: "Express/React 19 Active Polling Bridge",
+                        capabilities: {
+                          simulationControl: {
+                            parameters: {
+                              vaccRate: { type: "integer", min: 0, max: 100, default: 45 },
+                              socialDistance: { type: "enum", values: ["none", "mild", "moderate", "strict"], default: "moderate" },
+                              testingIntensity: { type: "integer", min: 0, max: 100, default: 50 },
+                              selectedEpidemicId: { type: "string", values: ["covid19", "h5n1", "disease_x", "ebola", "mpox", "nipah"] }
+                            },
+                            actions: {
+                              SET_PARAMS: "Instructs UI components to sync params values vectors",
+                              RESET: "Reverts entire environmental state back to offline coordinates"
+                            }
+                          },
+                          coordinationBoard: {
+                            actions: {
+                              ADD_TASK: {
+                                description: "Syndicates high-importance public health mandate directly to stakeholder board"
+                              }
+                            }
+                          }
+                        },
+                        endpoints: {
+                          get_discovery: "GET /api/a2ui/config",
+                          get_session_state: "GET /api/a2ui/state",
+                          post_agent_action: "POST /api/a2ui/action"
+                        }
+                      }, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+
+              {/* Card 3: live state stream feed log  */}
+              <div className="bg-[#0f121e]/40 border border-white/10 p-6 rounded-3xl shadow-lg flex-1 flex flex-col justify-between" id="stream-logs-box">
+                <div>
+                  <h3 className="text-xs font-bold tracking-wider text-slate-300 uppercase mb-1.5 flex items-center gap-1.5 border-b border-white/10 pb-2">
+                    <Radio className="w-4 h-4 text-indigo-400 rotate-12" />
+                    Ingress Signal Feed & Actions Audit Log
+                  </h3>
+                  
+                  <div className="space-y-3 mt-4 max-h-[285px] overflow-y-auto pr-1" id="log-entries-list">
+                    {!a2uiSession || !a2uiSession.actionsLog || a2uiSession.actionsLog.length === 0 ? (
+                      <div className="text-center py-12 text-white/30 italic text-xs">
+                        No transactions registered. Ready for input actions.
+                      </div>
+                    ) : (
+                      a2uiSession.actionsLog.map((log: any) => {
+                        return (
+                          <div key={log.id} className="bg-white/5 border border-white/5 rounded-xl p-3 flex flex-col gap-1 text-[11px] font-mono hover:border-white/10 transition-colors">
+                            <div className="flex justify-between items-center">
+                              <span className={`text-[9.5px]/none font-black px-1.5 py-0.5 rounded ${
+                                log.sender === 'agent_antigravity'
+                                  ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20'
+                                  : log.sender === 'agent_gemini'
+                                  ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/20'
+                                  : log.sender === 'system'
+                                  ? 'bg-slate-500/10 text-slate-400'
+                                  : 'bg-white/10 text-white'
+                              }`}>
+                                @{log.sender.toUpperCase()}
+                              </span>
+                              <span className="text-white/30 text-[9px]">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-slate-200 mt-1 font-sans">
+                              <span>Action Type: <strong className="text-teal-300 font-mono text-[10.5px]">{log.type}</strong></span>
+                              <span className="text-[10px] text-white/50 font-mono font-medium font-bold">TxID: {log.id}</span>
+                            </div>
+                            {log.payload && Object.keys(log.payload).length > 0 && (
+                              <pre className="mt-2 bg-[#090b13] p-2 rounded-lg text-[9.5px] text-zinc-400 overflow-x-auto whitespace-pre-wrap max-h-[85px] border border-white/5 font-mono">
+                                {JSON.stringify(log.payload, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-white/5 flex items-center justify-between text-white/40 text-[10px] font-mono">
+                  <span>Audit Sync Protocol active</span>
+                  <span>Total captured logs: {a2uiSession?.actionsLog?.length || 0}</span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* RIGHT SIDE: INTERACTIVE SYSTEM TECH STACK SHEET */}
+            <div className="lg:col-span-5 flex flex-col gap-6" id="system-architecture-panel">
+              
+              {/* Tech Stack Bento Grid Card */}
+              <div className="bg-white/5 backdrop-blur-2xl border border-white/10 p-6 rounded-3xl shadow-lg" id="tech-sheet-card">
+                <span className="text-[9.5px] font-bold text-indigo-400 uppercase tracking-widest block font-mono mb-1">Production Spec Sheet</span>
+                <h3 className="text-base font-black text-white flex items-center gap-2 mb-4">
+                  <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
+                  WCC Node Tech Stack Sheet
+                </h3>
+                <p className="text-xs text-white/60 leading-relaxed mb-6 font-sans">
+                  Official operational report cataloging core packages, compilers, heuristic pathways and visual runtimes fueling this outpost node.
+                </p>
+
+                {/* Grid of Tech Stack Spec cards */}
+                <div className="space-y-3.5" id="spec-sheet-list">
+                  {[
+                    { tier: "Runtime Environment", name: "Node.js (LTS Engine v22)", spec: "v22 Standalone Container Environment", badge: "Runtime", color: "text-emerald-400 border-emerald-500/20 bg-emerald-500/5" },
+                    { tier: "System Coding Layer", name: "TypeScript (Type Compiler)", spec: "v5.8 Strict Type Safety Verification", badge: "Language", color: "text-blue-400 border-blue-500/20 bg-blue-500/5" },
+                    { tier: "Client UI Framework", name: "React 19 (Functional Hooks UI)", spec: "v19 Virtual-DOM Component Nodes", badge: "Frontend", color: "text-cyan-400 border-cyan-500/20 bg-cyan-500/5" },
+                    { tier: "Web Server Infrastructure", name: "Express Framework API Routes", spec: "v4.21 Full-Stack Routing Proxy", badge: "Backend", color: "text-indigo-400 border-indigo-500/20 bg-indigo-500/5" },
+                    { tier: "Compiler & Asset bundler", name: "Vite + Esbuild Pipeline Node", spec: "Vite v6 Client / Esbuild v0.25 CJS Bundler", badge: "Build Pipeline", color: "text-purple-400 border-purple-500/20 bg-purple-500/5" },
+                    { tier: "Design Styling System", name: "Tailwind CSS v4.x Web Compiler", spec: "Native @tailwindcss/vite CSS Variable Themes", badge: "CSS Utility", color: "text-teal-400 border-teal-500/20 bg-teal-500/5" },
+                    { tier: "Heuristic Intel Pipeline", name: "Google Gemini 3.5 Flash Model", spec: "@google/genai TS SDK Server-Side Client proxy", badge: "AI Core", color: "text-rose-400 border-rose-500/20 bg-rose-500/5" },
+                    { tier: "Qualitative Web Grounding", name: "Linkup Live Search indexing service", spec: "Grounding indexes integration /v1/search api", badge: "External API", color: "text-amber-400 border-amber-500/25 bg-amber-500/5" },
+                    { tier: "Data & Charts plotting", name: "Recharts Node & HTML5 SVG Canvas", spec: "v3 Graphics Coordinate mapping & custom tooltips", badge: "Graphics", color: "text-orange-400 border-orange-500/20 bg-orange-500/5" }
+                  ].map((tech, i) => (
+                    <div key={i} className="bg-white/5 border border-white/5 rounded-2xl p-4 flex justify-between items-center hover:bg-white/10 hover:border-white/10 transition-colors">
+                      <div>
+                        <span className="text-[10px] text-white/40 block font-mono uppercase tracking-wide">{tech.tier}</span>
+                        <span className="text-[12px] font-black text-white mt-0.5 block">{tech.name}</span>
+                        <span className="text-[10px] text-white/50 block font-mono mt-0.5">{tech.spec}</span>
+                      </div>
+                      <span className={`text-[9.5px]/none font-bold font-mono tracking-wider uppercase border rounded-md px-2 py-0.5 shrink-0 ${tech.color}`}>
+                        {tech.badge}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/15 mt-6" id="architecture-notes">
+                  <h4 className="text-[11px] uppercase font-bold text-white tracking-widest font-mono">Structural Sandbox Details</h4>
+                  <p className="text-[10.5px] text-white/45 mt-1.5 leading-normal font-sans">
+                    This full-stack model abstracts environment variables completely from client exposure. Secure transactions flow exclusively through reverse proxy pipelines to maintain sovereign encryption and credential sandboxing.
+                  </p>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
         </div>
       )}
 

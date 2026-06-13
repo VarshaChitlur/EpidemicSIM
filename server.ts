@@ -19,6 +19,16 @@ app.use(express.json());
 // -------------------------------------------------------------
 type SocialDistanceLevel = 'none' | 'mild' | 'moderate' | 'strict';
 
+export interface EpidemicType {
+  id: string;
+  name: string;
+  r0: number;
+  vaccEffectiveness: number;
+  hospitalRate: number;
+  recoveryRate: number;
+  description: string;
+}
+
 interface SimulationParams {
   vaccRate: number;
   socialDistance: SocialDistanceLevel;
@@ -43,15 +53,22 @@ interface SimulationResult {
   summary: string;
 }
 
-export function runSIRModel({ vaccRate, socialDistance, testingIntensity }: SimulationParams): SimulationResult {
+export function runSIRModel(
+  { vaccRate, socialDistance, testingIntensity }: SimulationParams,
+  epidemic?: EpidemicType
+): SimulationResult {
   const POPULATION = 100_000_000;
   let S = POPULATION - 2_400_000; // Susceptible (initially 97.6M)
   let I = 2_400_000;              // Infected (initially 2.4M)
   let R = 0;                       // Recovered
-  const R0 = 3.2;                  // Base reproduction rate
+  
+  const R0 = epidemic ? epidemic.r0 : 3.2;                  // Base reproduction rate
+  const vaccEffCoeff = epidemic ? epidemic.vaccEffectiveness : 0.72;
+  const hospitalRateCoeff = epidemic ? epidemic.hospitalRate : 0.008;
+  const recoveryRateCoeff = epidemic ? epidemic.recoveryRate : 0.08;
 
   // Reduction factors
-  const vaccEffect = (vaccRate / 100) * 0.72; // max 72% transmission reduction
+  const vaccEffect = (vaccRate / 100) * vaccEffCoeff; // max reduction
   const sdEffect = { none: 0, mild: 0.18, moderate: 0.48, strict: 0.75 }[socialDistance] || 0;
   const testEffect = (testingIntensity / 100) * 0.25; // max 25% early detection isolation reduction
   const totalReduction = Math.min(vaccEffect + sdEffect + testEffect, 0.95);
@@ -65,14 +82,13 @@ export function runSIRModel({ vaccRate, socialDistance, testingIntensity }: Simu
   for (let day = 0; day < 180; day++) {
     // Standard SIR formulation
     const newI = (S / POPULATION) * I * Reff * 0.15; // daily transmission coefficient
-    const newR = I * 0.08; // 8% recovery/turnover rate daily
+    const newR = I * recoveryRateCoeff; // recovery/turnover rate daily
     S = Math.max(0, S - newI);
     I = Math.max(0, I + newI - newR);
     R += newR;
     
     dailyCases.push(Math.round(I));
-    // 0.8% of active cases might need high-care or regular beds
-    dailyBeds.push(Math.round(I * 0.008));
+    dailyBeds.push(Math.round(I * hospitalRateCoeff));
     
     if (I > peakCases) {
       peakCases = I;
@@ -85,6 +101,8 @@ export function runSIRModel({ vaccRate, socialDistance, testingIntensity }: Simu
   const totalDurationDays = endDay === -1 ? 180 : endDay;
   const peakCasesRounded = Math.round(peakCases);
 
+  const epName = epidemic ? epidemic.name : "COVID-19";
+
   return {
     peakCases: peakCasesRounded,
     peakDay,
@@ -92,7 +110,7 @@ export function runSIRModel({ vaccRate, socialDistance, testingIntensity }: Simu
     rEffective: parseFloat(Reff.toFixed(2)),
     dailyCases,
     dailyBeds,
-    hospitalPeakBeds: Math.round(peakCasesRounded * 0.008),
+    hospitalPeakBeds: Math.round(peakCasesRounded * hospitalRateCoeff),
     regionalDistribution: {
       northeast: Math.round(peakCasesRounded * 0.22),
       midwest: Math.round(peakCasesRounded * 0.24),
@@ -100,7 +118,7 @@ export function runSIRModel({ vaccRate, socialDistance, testingIntensity }: Simu
       west: Math.round(peakCasesRounded * 0.24)
     },
     params: { vaccRate, socialDistance, testingIntensity },
-    summary: `With a ${vaccRate}% vaccination rate, ${socialDistance} social mitigation mandates, and ${testingIntensity}% surveillance diagnostics scope, the transmission rate (Reff) is limited to ${Reff.toFixed(2)}. This results in a peak caseload of ${(peakCasesRounded / 1e6).toFixed(2)}M infections on day ${peakDay}, requiring up to ${Math.round(peakCasesRounded * 0.008).toLocaleString()} localized surge capacity beds.`
+    summary: `For ${epName} with a ${vaccRate}% vaccination rate, ${socialDistance} social mitigation mandates, and ${testingIntensity}% surveillance diagnostics scope, the transmission rate (Reff) is limited to ${Reff.toFixed(2)}. This results in a peak caseload of ${(peakCasesRounded / 1e6).toFixed(2)}M infections on day ${peakDay}, requiring up to ${Math.round(peakCasesRounded * hospitalRateCoeff).toLocaleString()} localized surge capacity beds.`
   };
 }
 
@@ -178,8 +196,213 @@ async function fetchLinkupSearch(query: string, depth = 'standard'): Promise<any
 }
 
 // -------------------------------------------------------------
+// 2.7 AG UI & A2UI Open Protocol State Engine
+// -------------------------------------------------------------
+
+interface AgentActionLogEntry {
+  id: string;
+  timestamp: string;
+  sender: 'agent_antigravity' | 'agent_gemini' | 'system' | 'user';
+  type: 'SET_PARAMS' | 'ADD_TASK' | 'PROTOCOL_INIT' | 'TRIGGER_WAVE' | 'RESET';
+  payload: any;
+}
+
+interface AgentSessionState {
+  currentParams: {
+    vaccRate: number;
+    socialDistance: SocialDistanceLevel;
+    testingIntensity: number;
+    selectedEpidemicId: string;
+  };
+  actionsLog: AgentActionLogEntry[];
+  externalTasks: Array<{
+    id: string;
+    title: string;
+    group: 'public_health' | 'hospital' | 'policy' | 'media';
+    region: 'All' | 'Americas' | 'Europe' | 'Asia-Pacific' | 'Africa & ME';
+    priority: 'High' | 'Medium' | 'Low';
+    dueTime: string;
+  }>;
+}
+
+let agentSession: AgentSessionState = {
+  currentParams: {
+    vaccRate: 45,
+    socialDistance: 'moderate',
+    testingIntensity: 50,
+    selectedEpidemicId: 'covid19'
+  },
+  actionsLog: [
+    {
+      id: 'init-protocol-node',
+      timestamp: new Date().toISOString(),
+      sender: 'system',
+      type: 'PROTOCOL_INIT',
+      payload: { 
+        version: '1.2.0', 
+        profile: 'Epidemic Spread Coordinator Gateway',
+        ag_ui_supported: true,
+        a2ui_supported: true 
+      }
+    }
+  ],
+  externalTasks: []
+};
+
+// -------------------------------------------------------------
 // 3. API Endpoints
 // -------------------------------------------------------------
+
+// A1: A2UI Specificaiton Discovery Schema Endpoint
+app.get('/api/a2ui/config', (req, res) => {
+  return res.json({
+    protocol: "Agent-to-User-Interface (A2UI) & Antigravity (AG) UI Open Standards",
+    spec_version: "1.2.0",
+    client_bridge: "Express/React 19 Active Polling Bridge",
+    documentation: {
+      overview: "Allows autonomous agent systems (such as Antigravity and Gemini) to discover UI controls, read state variables, register visual manifests, and dispatch deterministic action instructions.",
+      schemas: {
+        A2UI_State_Sync_Request: "GET /api/a2ui/state",
+        A2UI_Action_Execution: "POST /api/a2ui/action",
+        AG_UI_Discovery: "GET /api/a2ui/config"
+      }
+    },
+    capabilities: {
+      simulationControl: {
+        parameters: {
+          vaccRate: { type: "integer", min: 0, max: 100, default: 45, description: "Active vaccination target threshold percentage" },
+          socialDistance: { type: "enum", values: ["none", "mild", "moderate", "strict"], default: "moderate", description: "Mandated community movement restrictions" },
+          testingIntensity: { type: "integer", min: 0, max: 100, default: 50, description: "Surveillance diagnostics and contact isolation level" },
+          selectedEpidemicId: { type: "string", values: ["covid19", "h5n1", "disease_x", "ebola", "mpox", "nipah"], default: "covid19", description: "The active pathogen epidemic footprint being simulated" }
+        },
+        actions: {
+          SET_PARAMS: "Directly instructs the UI state to align with specified mathematical vectors",
+          RESET: "Reverts entire environmental state back to default offline coordinates"
+        }
+      },
+      coordinationBoard: {
+        actions: {
+          ADD_TASK: {
+            description: "Syndicates a high-importance public health mandate task directly onto the global stakeholder board",
+            arguments: {
+              title: { type: "string", required: true },
+              group: { type: "enum", values: ["public_health", "hospital", "policy", "media"], required: true },
+              region: { type: "enum", values: ["All", "Americas", "Europe", "Asia-Pacific", "Africa & ME"], required: true },
+              priority: { type: "enum", values: ["High", "Medium", "Low"], required: true },
+              dueTime: { type: "string", default: "24h" }
+            }
+          }
+        }
+      }
+    },
+    endpoints: {
+      get_discovery: "GET /api/a2ui/config",
+      get_session_state: "GET /api/a2ui/state",
+      post_agent_action: "POST /api/a2ui/action"
+    }
+  });
+});
+
+// A2: A2UI Active State Sync Retrieval
+app.get('/api/a2ui/state', (req, res) => {
+  return res.json(agentSession);
+});
+
+// A3: A2UI Deterministic Action Ingress Dispatcher
+app.post('/api/a2ui/action', (req, res) => {
+  try {
+    const { actionType, payload, sender = 'agent_antigravity' } = req.body;
+    if (!actionType) {
+      return res.status(400).json({ error: "Required field actionType missing in protocol envelop." });
+    }
+
+    const entryId = `act-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const timestamp = new Date().toISOString();
+
+    if (actionType === 'SET_PARAMS') {
+      const { vaccRate, socialDistance, testingIntensity, selectedEpidemicId } = payload || {};
+      
+      if (vaccRate !== undefined) agentSession.currentParams.vaccRate = Math.max(0, Math.min(100, Number(vaccRate)));
+      if (testingIntensity !== undefined) agentSession.currentParams.testingIntensity = Math.max(0, Math.min(100, Number(testingIntensity)));
+      if (selectedEpidemicId !== undefined) agentSession.currentParams.selectedEpidemicId = String(selectedEpidemicId);
+      if (socialDistance !== undefined && ['none', 'mild', 'moderate', 'strict'].includes(socialDistance)) {
+        agentSession.currentParams.socialDistance = socialDistance as SocialDistanceLevel;
+      }
+
+      agentSession.actionsLog.unshift({
+        id: entryId,
+        timestamp,
+        sender: sender as any,
+        type: 'SET_PARAMS',
+        payload
+      });
+      
+      // Limit audit log size
+      if (agentSession.actionsLog.length > 50) {
+        agentSession.actionsLog = agentSession.actionsLog.slice(0, 50);
+      }
+
+      return res.json({ success: true, message: "A2UI Action standard parameters synced successfully.", state: agentSession });
+    }
+
+    if (actionType === 'ADD_TASK') {
+      const { title, group, region = 'All', priority = 'Medium', dueTime = '24h' } = payload || {};
+      if (!title || !group) {
+        return res.status(400).json({ error: "Missing required properties (title, group) for ADD_TASK action payload." });
+      }
+
+      const newTask = {
+        id: `ext-${Date.now()}`,
+        title,
+        group: group as any,
+        region: region as any,
+        priority: priority as any,
+        dueTime
+      };
+
+      agentSession.externalTasks.unshift(newTask);
+      
+      agentSession.actionsLog.unshift({
+        id: entryId,
+        timestamp,
+        sender: sender as any,
+        type: 'ADD_TASK',
+        payload: newTask
+      });
+
+      if (agentSession.actionsLog.length > 50) {
+        agentSession.actionsLog = agentSession.actionsLog.slice(0, 50);
+      }
+
+      return res.json({ success: true, message: "A2UI stakeholder Action task registered.", state: agentSession });
+    }
+
+    if (actionType === 'RESET') {
+      agentSession.currentParams = {
+        vaccRate: 45,
+        socialDistance: 'moderate',
+        testingIntensity: 50,
+        selectedEpidemicId: 'covid19'
+      };
+      agentSession.externalTasks = [];
+      agentSession.actionsLog.unshift({
+        id: entryId,
+        timestamp,
+        sender: sender as any,
+        type: 'RESET',
+        payload: {}
+      });
+
+      return res.json({ success: true, message: "A2UI state reset executed.", state: agentSession });
+    }
+
+    return res.status(400).json({ error: `Unsupported A2UI/AG UI actionType: '${actionType}'` });
+
+  } catch (err: any) {
+    console.error("A2UI Action execution trap error:", err);
+    return res.status(500).json({ error: err.message || "Failed to parse and dispatch A2UI protocol action." });
+  }
+});
 
 // Independent search route using the Linkup API securely
 app.post('/api/search', async (req, res) => {
@@ -199,7 +422,7 @@ app.post('/api/search', async (req, res) => {
 // Single direct simulation parameters runner
 app.post('/api/simulate', (req, res) => {
   try {
-    const { vaccRate = 45, socialDistance = 'moderate', testingIntensity = 50 } = req.body;
+    const { vaccRate = 45, socialDistance = 'moderate', testingIntensity = 50, epidemic } = req.body;
     let validDistance: SocialDistanceLevel = 'moderate';
     if (['none', 'mild', 'moderate', 'strict'].includes(socialDistance)) {
       validDistance = socialDistance as SocialDistanceLevel;
@@ -208,7 +431,7 @@ app.post('/api/simulate', (req, res) => {
       vaccRate: Math.max(0, Math.min(100, Number(vaccRate))),
       socialDistance: validDistance,
       testingIntensity: Math.max(0, Math.min(100, Number(testingIntensity)))
-    });
+    }, epidemic);
     return res.json(result);
   } catch (err: any) {
     console.error("Simulation endpoint error:", err);
@@ -219,12 +442,13 @@ app.post('/api/simulate', (req, res) => {
 // Chatbot prompt model coordinator
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, history = [], currentParams, webSearchEnabled = false } = req.body;
+    const { message, history = [], currentParams, webSearchEnabled = false, epidemic } = req.body;
     if (!message) {
       return res.status(400).json({ error: "A message prompt is required." });
     }
 
     const ai = getGeminiClient();
+    let isFallbackMode = false;
     
     // Default fallback parameters in case AI fails or is not available
     let extractedParams = {
@@ -245,6 +469,15 @@ app.post('/api/chat', async (req, res) => {
         - "vaccRate": Number (0-100), defaults to the past value or current baseline (45) if unspecified.
         - "socialDistance": One of: "none", "mild", "moderate", "strict", defaults to baseline if unspecified.
         - "testingIntensity": Number (0-100), defaults to the past value or current baseline (50) if unspecified.
+
+        Currently, the active epidemic being simulated is:
+        - Name: "${epidemic?.name || 'COVID-19'}"
+        - R0 (Base Transmission): ${epidemic?.r0 || 3.2}
+        - Hospitalization Rate: ${((epidemic?.hospitalRate || 0.008) * 100).toFixed(1)}%
+        - Recovery Rate: ${((epidemic?.recoveryRate || 0.08) * 100).toFixed(1)}% daily
+        - Details: "${epidemic?.description || 'Standard respiratory pathogen'}"
+
+        Ensure your response "answerText" is highly specific to the transmission rate, symptoms, geographical context, and public health impact of this specific pathogen. Provide customized advice (e.g. emphasize vaccine mobilization if it's COVID, extreme isolation/PPE controls if it's Ebola, bat vector precautions if it's Nipah, etc.).
 
         Analyze standard guidelines, vaccine rates, lockdowns, border closures, or policy updates mentioned.
         Provide a smart, clear, and professional response in "answerText". Ensure there is NO markdown-bold syntax like * or ** within variables. Keep it readable.
@@ -345,7 +578,8 @@ app.post('/api/chat', async (req, res) => {
         answerText = parsedContent.answerText || "Calculated optimal spread levels of transmission successfully.";
         potentialTasks = parsedContent.potentialTasks || [];
       } catch (innerError: any) {
-        console.error("Gemini call fell back to pure heuristics:", innerError);
+        isFallbackMode = true;
+        console.log("Notice: Operational rate limit constraint met or offline. Engaging high-fidelity local SIR projection simulator.");
         // Simple word matches for offline/fallback mode
         const text = message.toLowerCase();
         if (text.includes("vaccin") || text.includes("vax")) {
@@ -370,6 +604,7 @@ app.post('/api/chat', async (req, res) => {
         ];
       }
     } else {
+      isFallbackMode = true;
       // Direct local extraction if API key is not supplied
       const text = message.toLowerCase();
       if (text.includes("vaccin") || text.includes("vax") || text.includes("percent")) {
@@ -398,7 +633,7 @@ app.post('/api/chat', async (req, res) => {
       vaccRate: extractedParams.vaccRate,
       socialDistance: extractedParams.socialDistance,
       testingIntensity: extractedParams.testingIntensity
-    });
+    }, epidemic);
 
     if (searchGrounding) {
       searchGrounding.answer = answerText;
@@ -409,6 +644,7 @@ app.post('/api/chat', async (req, res) => {
       extractedParams,
       simulationResult: simResult,
       searchGrounding,
+      isFallbackMode,
       tasks: potentialTasks.map((t: any, idx: number) => ({
         id: `spawned-${Date.now()}-${idx}`,
         title: t.title,
